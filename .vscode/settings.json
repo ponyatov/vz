@@ -1,11 +1,12 @@
 {
+    // \ multi
     "multiCommand.commands": [
         {
             "command": "multiCommand.f11",
             "sequence": [
                 "workbench.action.files.saveAll",
                 {"command": "workbench.action.terminal.sendSequence",
-                    "args": {"text": "\u000D make repl \u000D"}}
+                    "args": {"text": "\u000D make meta \u000D"}}
             ]
         },
         {
@@ -13,10 +14,11 @@
             "sequence": [
                 "workbench.action.files.saveAll",
                 {"command": "workbench.action.terminal.sendSequence",
-                    "args": {"text": "sys.exit(0)\u000D"}}
+                    "args": {"text": "\u000D make all \u000D"}}
             ]
         },
     ],
+    // / multi
 
     // \ files
     "files.exclude": {

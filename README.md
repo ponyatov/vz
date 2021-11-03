@@ -3,6 +3,7 @@
 
 (c) Dmitry Ponyatov <dponyatov@gmail.com> 2020 All rights reserved
 
-github: {self.GITHUB}/{self}
+github: https://github.com/ponyatov/vz
 
+* object (hyper)graph interpreter
 

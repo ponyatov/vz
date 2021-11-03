@@ -1,0 +1,4 @@
+git make curl
+code meld
+python3 python3-venv
+build-essential g++

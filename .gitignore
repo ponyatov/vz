@@ -1,5 +1,8 @@
 *~
 *.swp
 *.log
+
 /vz/
+/__pycache__/
+
 !.gitignore

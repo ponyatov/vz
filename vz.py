@@ -1,44 +1,32 @@
-# vz: ViZual language environment
-# (c) Dmitry Ponyatov <dponyatov@gmail.com> 2020 All rights reserved
-
 import os, sys
 
-## base object (hyper)graph node
 class Object:
 
     ## @name constructor
 
     def __init__(self, V):
-        self.type = self.tag()
         self.value = V
-        self.slot = {}
         self.nest = []
 
     def box(self, that):
         if isinstance(that, Object): return that
         if isinstance(that, str): return S(that)
-        if callable(that): return Cmd(that)
         raise TypeError(['box', type(that), that])
 
-    ## @name text dump
+    ## @name dump / string
 
-    def __repr__(self): return self.dump()
+    def test(self): return self.dump(test=True)
+    def __repr__(self): return self.dump(test=False)
 
-    def dump(self, cycle=[], depth=0, prefix=''):
+    def dump(self, cycle=[], depth=0, prefix='', test=False):
         # head
         def pad(depth): return '\n' + '\t' * depth
-        ret = pad(depth) + self.head(prefix)
-        # slot{}
-        for i in self.keys():
-            ret += self[i].dump(cycle, depth + 1, f'{i} = ')
-        # nest[]ed
-        for j, k in enumerate(self):
-            ret += k.dump(cycle, depth + 1, f'{j}: ')
+        ret = pad(depth) + self.head(prefix, test)
         # subtree
         return ret
 
-    def head(self, prefix=''):
-        gid = f' @{id(self):x}'
+    def head(self, prefix='', test=False):
+        gid = '' if test else f' @{id(self):x}'
         return f'{prefix}<{self.tag()}:{self.val()}>{gid}'
 
     def __format__(self, spec=''):
@@ -50,81 +38,47 @@ class Object:
 
     ## @name operator
 
-    def keys(self): return sorted(self.slot.keys())
-
-    def __iter__(self): return iter(self.nest)
-
-    def __getitem__(self, key):
-        if isinstance(key, str): return self.slot[key]
-        raise TypeError(['__getitem__', type(key), key])
-
-    def __setitem__(self, key, that):
-        that = self.box(that)
-        if isinstance(key, str): self.slot[key] = that; return self
-        raise TypeError(['__setitem__', type(key), key, that])
-
-    def __lshift__(self, that):
-        that = self.box(that)
-        return self.__setitem__(that.tag(), that)
-
-    def __rshift__(self, that):
-        that = self.box(that)
-        return self.__setitem__(that.val(), that)
+    def __iter__(self):
+        return iter(self.nest)
 
     def __floordiv__(self, that):
-        self.append(that); return self
-
-    def append(self, that):
-        self.nest.append(self.box(that))
-
-    ## @name stack operation
-
-    def dot(self): self.nest.clear(); return self
+        self.nest.append(self.box(that)); return self
 
 class Primitive(Object):
-    def eval(self, env): env // self
+    pass
 
-## symbol
-class Sym(Primitive):
-    def eval(self, env): return env[self.val()].eval(env)
-
-## integer number
-class Int(Primitive):
-    def __init__(self, N): super().__init__(int(N))
-
-## source code /nested strings/
 class S(Primitive):
-    def __init__(self, start=None, end=None, pfx=None, sfx=None):
-        super().__init__(start)
-        self.end = end
-        self.pfx = pfx; self.sfx = sfx
+    def __init__(self, V=None, end=None, pfx=None, sfx=None):
+        super().__init__(V)
+        self.end = end; self.pfx = pfx; self.sfx = sfx
 
     def gen(self, to, depth=0):
         ret = ''
         if self.pfx is not None:
-            ret += f'{to.tab*depth}{self.pfx}\n' if self.pfx else '\n'
+            ret += f'{to.tab*depth}{self.pfx}\n'
         if self.value is not None:
             ret += f'{to.tab*depth}{self.value}\n'
         for i in self:
             ret += i.gen(to, depth + 1)
-        if self.end:
+        if self.end is not None:
             ret += f'{to.tab*depth}{self.end}\n'
         if self.sfx is not None:
-            ret += f'{to.tab*depth}{self.sfx}\n' if self.sfx else '\n'
+            ret += f'{to.tab*depth}{self.sfx}\n'
         return ret
 
 class Sec(S):
     def gen(self, to, depth=0):
         ret = ''
-        if self.nest:
-            if self.pfx is not None:
-                ret += f'{to.tab*depth}{self.pfx}\n' if self.pfx else '\n'
-            if self.value is not None:
-                ret += f'{to.tab*depth}{to.comment} \\ {self.value}\n'
-            for i in self:
-                ret += i.gen(to, depth + 0)
-            if self.value is not None:
-                ret += f'{to.tab*depth}{to.comment} / {self.value}\n'
+        if self.pfx is not None:
+            ret += f'{to.tab*depth}{self.pfx}\n' if self.pfx else '\n'
+        if self.nest and self.value is not None:
+            ret += f'{to.tab*depth}{to.comment} \\ {self}\n'
+        for i in self:
+            ret += i.gen(to, depth + 0)
+        if self.nest and self.value is not None:
+            ret += f'{to.tab*depth}{to.comment} / {self}\n'
+        if self.sfx is not None:
+            ret += f'{to.tab*depth}{self.sfx}\n' if self.pfx else '\n'
         return ret
 
 class IO(Object):
@@ -133,21 +87,21 @@ class IO(Object):
         self.path = V
 
 class Dir(IO):
-    def sync(self):
-        try: os.mkdir(self.path)
-        except FileExistsError: pass
-        for i in self: i.sync()
-
     def __floordiv__(self, that):
         assert isinstance(that, IO)
         that.path = f'{self.path}/{that.path}'
         return super().__floordiv__(that)
 
+    def sync(self):
+        try: os.mkdir(self.path)
+        except FileExistsError: pass
+        for i in self: i.sync()
+
 class File(IO):
     def __init__(self, V, ext='', tab=' ' * 4, comment='#'):
         super().__init__(V + ext)
-        self.ext = ext; self.tab = tab; self.comment = comment
         self.top = Sec(); self.bot = Sec()
+        self.tab = tab; self.comment = comment
 
     def sync(self):
         with open(self.path, 'w') as F:
@@ -155,252 +109,284 @@ class File(IO):
             for i in self: F.write(i.gen(self))
             F.write(self.bot.gen(self))
 
-class Meta(Object): pass
-
-class Makefile(File):
-    def __init__(self, V='Makefile', ext='', tab='\t', comment='#'):
-        super().__init__(V, ext, tab, comment)
-
 class giti(File):
-    def __init__(self, V='', ext='.gitignore'):
-        super().__init__(V, ext)
+    def __init__(self, V='.gitignore'):
+        super().__init__(V)
         self.bot // f'!{self}'
 
-class jsonFile(File):
-    def __init__(self, V, ext='.json', tab=' ' * 4, comment='//'):
-        super().__init__(V, ext, tab, comment)
+class Makefile(File):
+    def __init__(self, V='Makefile'):
+        super().__init__(V, tab='\t')
 
 class pyFile(File):
-    def __init__(self, V, ext='.py', tab=' ' * 4, comment='#'):
-        super().__init__(V, ext, tab, comment)
+    def __init__(self, V, ext='.py'):
+        super().__init__(V, ext)
 
-class mdFile(File):
-    def __init__(self, V, ext='.md', tab=' ' * 4, comment='#'):
-        super().__init__(V, ext, tab, comment)
+class jsonFile(File):
+    def __init__(self, V, ext='.json', comment='//'):
+        super().__init__(V, ext, comment=comment)
+
+class Meta(Object): pass
+
+class Class(Meta):
+    def __init__(self, C, sup=[]):
+        assert callable(C)
+        super().__init__(C.__name__)
+        self.clazz = C; self.sup = sup
+
+    def gen(self, to, depth=0):
+        ret = S(f'class {self}:', pfx='') // 'pass'
+        return ret.gen(to, depth)
 
 class Project(Meta):
-    def __init__(self, V=None, title=None):
-        if V is None: V = os.getcwd().split('/')[-1]
+    def __init__(self, V=None, title='', about=''):
+        if not V: V = os.getcwd().split('/')[-1]
         super().__init__(V)
         #
-        self.TITLE = title if title else self.val()
+        self.TITLE = title if title else f'{self}'
+        self.ABOUT = about
         self.AUTHOR = 'Dmitry Ponyatov'
         self.EMAIL = 'dponyatov@gmail.com'
-        self.YEAR = '2020'
         self.GITHUB = 'https://github.com/ponyatov'
-        self.ABOUT = ''
+        self.YEAR = 2020
+        self.LICENSE = 'All rights reserved'
+        self.COPYRIGHT = f'(c) {self.AUTHOR} <{self.EMAIL}> {self.YEAR} {self.LICENSE}'
         #
         self.dirs()
         self.mk()
-        self.giti()
-        self.vscode()
         self.src()
+        self.vscode()
+        self.apt()
 
-    def copyright(self):
-        return \
-            f'(c) {self.AUTHOR} <{self.EMAIL}> ' +\
-            f'{self.YEAR} All rights reserved'
+    def apt(self):
+        self.apt = File('apt', '.txt'); self.d // self.apt
+        self.apt \
+            // 'git make curl' // 'code meld' \
+            // 'python3 python3-venv' \
+            // 'build-essential g++'
 
     def vscode(self):
         self.vscode = Dir('.vscode'); self.d // self.vscode
         self.settings()
+        self.tasks()
 
     def settings(self):
         self.settings = jsonFile('settings'); self.vscode // self.settings
-        self.vsignore = (Sec() // '"vz/**":true,')
         #
-        self.exclude = (S('"files.exclude": {', '},')
-                        // self.vsignore)
-        self.watcher = (S('"files.watcherExclude": {', '},')
-                        // self.vsignore)
-        self.assoc = (S('"files.associations": {', '},'))
-        #
-        self.editor = (Sec('editor', pfx='')
-                       // '"editor.tabSize": 4,'
-                       // '"editor.rulers": [80],'
-                       // '"workbench.tree.indent": 32,')
-        #
-        self.multi = (S('"multiCommand.commands": [', '],'))
 
         def multi(key, cmd):
             return (S('{', '},')
                     // f'"command": "multiCommand.{key}",'
                     // (S('"sequence": [', ']')
-                        // '"workbench.action.files.saveAll",'
-                        // (S('{"command": "workbench.action.terminal.sendSequence",')
-                        // f'"args": {{"text": "{cmd}"}}}}')
-                        )
-                    )
-        for i, j in [
-                ['f11', '\\u000D make repl \\u000D'],
-                ['f12', 'sys.exit(0)\\u000D']
-        ]:
-            self.multi // multi(i, j)
+                    // '"workbench.action.files.saveAll",'
+                    // (S('{"command": "workbench.action.terminal.sendSequence",')
+                        // f'"args": {{"text": "\\u000D {cmd} \\u000D"}}}}'
+                        )))
+        self.multi = \
+            (Sec('multi')
+             // (S('"multiCommand.commands": [', '],')
+                 // multi('f11', 'make meta')
+                 // multi('f12', 'make all')
+                 ))
+        #
+        self.files = (Sec()
+                      // f'"{self}/**":true,'
+                      )
+        self.exclude = \
+            (Sec()
+             // (S('"files.exclude": {', '},') // self.files))
+        self.watcher = \
+            (Sec()
+             // (S('"files.watcherExclude": {', '},') // self.files))
+        self.assoc = \
+            (Sec()
+             // (S('"files.associations": {', '},')))
+        self.files = (Sec('files', pfx='')
+                      // self.exclude
+                      // self.watcher
+                      // self.assoc)
+        #
+        self.editor = (Sec('editor', pfx='')
+                       // '"editor.tabSize": 4,'
+                       // '"editor.rulers": [80],'
+                       // '"workbench.tree.indent": 32,'
+                       )
         #
         self.settings \
             // (S('{', '}')
                 // self.multi
-                // (Sec('files', pfx='')
-                    // self.exclude
-                    // self.watcher
-                    // self.assoc)
+                // self.files
                 // self.editor)
 
+    def tasks(self):
+        self.tasks = jsonFile('tasks'); self.vscode // self.tasks
+
+        def task(clazz, cmd):
+            return (S('{', '},')
+                    // f'"label":          "{clazz}: {cmd}",'
+                    // f'"type":           "shell",'
+                    // f'"command":        "make {cmd}",'
+                    // f'"problemMatcher": []'
+                    )
+        self.tasks \
+            // (S('{', '}')
+                // '"version": "2.0.0",'
+                // (S('"tasks": [', ']')
+                    // task('project', 'install')
+                    // task('project', 'update')
+                    // task('git', 'dev')
+                    // task('git', 'shadow')
+                    ))
+
     def src(self):
+        self.py()
+        self.test()
+        self.config()
+
+    def config(self):
+        self.config = pyFile('config'); self.d // self.config
+        self.config \
+            // f"{'SECURE_KEY':<11} = {os.urandom(0x22)}" \
+            // f"{'HOST':<11} = '127..0.0.1'" \
+            // f"{'PORT':<11} = 12345"
+
+    def py(self):
         self.py = pyFile(f'{self}'); self.d // self.py
         self.py \
-            // (Sec(sfx='')
-                // f'# {self}: {self.TITLE}'
-                // f'# {self.copyright()}'
-                )
+            // 'import os, sys'
+        for i in [Object, S, Sec, IO, Dir, File, Meta, Class, Project]:
+            self.py // Class(i)
+        self.py // Class(Primitive, [Object])
         self.py \
-            // (S('import os, sys', pfx=''))
-        self.py \
-            // (Sec(pfx='')
-                // f"p = Project(title='{self.TITLE}')"
-                )
-        #
+            // S('Project().sync()', pfx='')
+
+    def test(self):
         self.test = pyFile(f'test_{self}'); self.d // self.test
-        self.test // 'import pytest' // f'from {self} import *'
-        self.test // (S('def test_any(): assert True', pfx='', sfx=''))
+        self.test \
+            // 'import pytest' \
+            // f'from {self} import *' \
+            // 'def test_any(): assert True'
 
     def dirs(self):
-        self.d = Dir(f'{self}')
-        self.d.bin = Dir('bin'); self.d // self.d.bin
-        self.d.bin // (giti() // '*')
-        self.d.doc = Dir('doc'); self.d // self.d.doc
-        self.d.doc // (giti() // '*.pdf')
-        self.d.lib = Dir('lib'); self.d // self.d.lib
-        self.d.lib // giti()
-        self.d.src = Dir('src'); self.d // self.d.src
-        self.d.src // giti()
-        self.d.tmp = Dir('tmp'); self.d // self.d.tmp
-        self.d.tmp // (giti() // '*')
-
-    def giti(self):
-        self.giti = giti(); self.d // self.giti
-        self.giti.top // '*~' // '*.swp' // '*.log'
-        self.giti // f'/{self}/'
+        self.d = Dir(f'{self}'); self.giti = giti(); self.d // self.giti
+        self.giti.top // '*~' // '*.swp' // '*.log'; self.giti.top.sfx = ''
+        self.giti // f'/{self}/' // '/__pycache__/'
+        self.giti.bot.pfx = ''
+        #
+        self.bin = Dir('bin'); self.d // self.bin
 
     def mk(self):
         self.mk = Makefile(); self.d // self.mk
         #
-        self.mk.var = Sec('var'); self.mk // self.mk.var
+        self.mk.var = Sec('var', pfx=''); self.mk // self.mk.var
         self.mk.var \
-            // f'MODULE = $(notdir $(CURDIR))'
+            // f'{"MODULE":<11} = $(notdir $(CURDIR))' \
+            // f'{"OS":<11} = $(shell uname -s)' \
+            // f'{"CORES":<11} = $(shell grep processor /proc/cpuinfo | wc -l)'
         #
-        self.mk.tool = (Sec('tool', pfx='')
-                        // 'CURL = curl -L -o'
-                        // 'PY   = $(shell which python3)'
-                        // 'PEP  = $(shell which autopep8)'
-                        // 'PEPS = E26,E302,E305,E401,E402,E701,E702'
-                        )
-        self.mk // self.mk.tool
+        self.mk.dir = Sec('dir', pfx=''); self.mk // self.mk.dir
+        self.mk.dir \
+            // f'{"CWD":<11} = $(CURDIR)' \
+            // f'{"BIN":<11} = $(CWD)/bin' \
+            // f'{"DOC":<11} = $(CWD)/doc' \
+            // f'{"LIB":<11} = $(CWD)/lib' \
+            // f'{"SRC":<11} = $(CWD)/src' \
+            // f'{"TMP":<11} = $(CWD)/tmp'
+        #
+        self.mk.tool = Sec('tool', pfx=''); self.mk // self.mk.tool
+        self.mk.tool \
+            // f'CURL = curl -L -o' \
+            // f'PY   = $(shell which python3)' \
+            // f'PYT  = $(shell which pytest)' \
+            // f'PEP  = $(shell which autopep8)'
+        #
+        self.mk.package = Sec('package', pfx=''); self.mk // self.mk.package
+        self.mk.package \
+            // f'SYSLINUX_VER = 6.0.3'
         #
         self.mk.src = Sec('src', pfx=''); self.mk // self.mk.src
-        self.mk.src // 'SRC = $(MODULE).py'
+        self.mk.src \
+            // f'Y += $(MODULE).py test_$(MODULE).py' \
+            // f'P += config.py' \
+            // f'S += $(Y)'
+        #
+        self.mk.cfg = Sec('cfg', pfx=''); self.mk // self.mk.cfg
+        self.mk.cfg \
+            // f'PEPS = E26,E302,E305,E401,E402,E701,E702'
         #
         self.mk.all = Sec('all', pfx=''); self.mk // self.mk.all
         self.mk.all \
-            // (S('repl: $(SRC)')
-                // '$(PY) -i $<'
-                // '$(PEP) --ignore=$(PEPS) --in-place $?'
-                // '$(MAKE) $@')
+            // (S('meta: $(Y)', pfx='.PHONY: meta')
+                // '$(MAKE) test'
+                // '$(PY)   $(MODULE).py'
+                // '$(PEP)  --ignore=$(PEPS) --in-place $?')
+        self.mk.all \
+            // (S('test: $(Y)', pfx='\n.PHONY: test')
+                // '$(PYT) test_$(MODULE).py')
         #
-        self.mk.doc_ = Sec('doc', pfx='')
-        self.mk.doc = S('doc:', pfx='\n.PHONY: doc')
-        self.mk // (self.mk.doc_ // self.mk.doc)
-
-    def readme(self):
-        self.readme = mdFile('README'); self.d // self.readme
-        self.readme \
-            // f'#  ![logo](doc/logo.png) `{self}`' \
-            // f'## {self.TITLE}' // '' // self.copyright() // '' \
-            // 'github: {self.GITHUB}/{self}' // '' // self.ABOUT
+        self.mk.rule = Sec('rule', pfx=''); self.mk // self.mk.rule
+        #
+        self.mk.doc = Sec('doc', pfx=''); self.mk // self.mk.doc
+        self.mk.doc \
+            // S('doc: doc/pyMorphic.pdf', pfx='.PHONY: doc')
+        self.mk.doc \
+            // (S('doc/pyMorphic.pdf:')
+                // '$(CURL) $@ http://www.diva-portal.org/smash/get/diva2:22296/FULLTEXT01.pdf')
+        #
+        self.mk.install = Sec('install', pfx=''); self.mk // self.mk.install
+        self.mk.install // '.PHONY: install update'
+        self.mk.install \
+            // (S('install: $(OS)_install doc')
+                // '$(MAKE) test'
+                )
+        self.mk.install \
+            // (S('update: $(OS)_update doc')
+                // '$(MAKE) test'
+                )
+        self.mk.install \
+            // (S('Linux_install Linux_update:',
+                  pfx='.PHONY: Linux_install Linux_update')
+                // 'sudo apt update'
+                // 'sudo apt install -u `cat apt.txt`')
+        #
+        self.mk.merge = Sec('merge', pfx=''); self.mk // self.mk.merge
+        self.mk.merge \
+            // 'SHADOW ?= ponymuck'
+        self.mk.merge \
+            // 'MERGE   = Makefile .gitignore README.md apt.txt $(S)' \
+            // 'MERGE  += .vscode bin doc lib src tmp'
+        self.mk.merge \
+            // (S('dev:', pfx='\n.PHONY: dev')
+                // 'git push -v'
+                // 'git checkout $@'
+                // 'git checkout $(SHADOW) -- $(MERGE)'
+                )
+        self.mk.merge \
+            // (S('shadow:', pfx='\n.PHONY: shadow')
+                // 'git push -v'
+                // 'git checkout $(SHADOW)'
+                )
+        self.mk.merge \
+            // (S('release:', pfx='\n.PHONY: release')
+                )
+        self.mk.merge \
+            // (S('zip:', pfx='\n.PHONY: zip')
+                )
 
     def sync(self):
         self.readme()
         self.d.sync()
 
-class Net(Object): pass
-
-class URL(Net): pass
-
-
-p = Project(title='ViZual language environment')
-
-p.mk.doc.value += ' doc/diva2.pdf'
-p.mk.doc_ \
-    // (S('doc/diva2.pdf:')
-        // '$(CURL) $@ http://www.diva-portal.org/smash/get/diva2:22296/FULLTEXT01.pdf')
-
-p.sync()
-
-class Container(Object): pass
-
-class Stack(Container): pass
-
-class Map(Container): pass
-
-class Vector(Container): pass
-
-class Queue(Container): pass
-
-class Active(Object): pass
-
-class Env(Active, Map): pass
-
-glob = Env('global')
-
-class Cmd(Active):
-    def __init__(self, F):
-        assert callable(F)
-        super().__init__(F.__name__)
-        self.fn = F
-
-    def eval(self, env):
-        self.fn(env)
-
-glob['sys'] = lambda env: os._exit(0)
-glob['.'] = lambda env: env.dot()
-glob['exit'] = lambda env: None
-glob['('] = lambda env: None
-glob[')'] = lambda env: None
-
-import ply.lex as lex
-
-tokens = ['sym', 'int']
-
-t_ignore = ' \t\r'
-t_ignore_comment = '\#.*'
-
-def t_newline(t):
-    r'\n+'
-    t.lexer.lineno += len(t.value)
-
-def t_int(t):
-    r'[+\-]?[0-9]+'
-    return Int(t.value)
-
-def t_sym(t):
-    r'[a-zA-Z0-9_]+|[.()]'
-    return Sym(t.value)
-
-def t_error(t): raise SyntaxError(t)
-
-lexer = lex.lex()
-
-def REPL():
-    while True:
-        print(glob)
-        print('-' * 66)
-        lexer.input(input('> '))
-        while True:
-            token = lexer.token()
-            if not token: break
-            print(token)
-            token.eval(glob)
-        print(glob)
-
-if __name__ == '__main__':
-    REPL()
+    def readme(self):
+        self.readme = File('README', '.md'); self.d // self.readme
+        self.readme \
+            // f'#  ![logo](doc/logo.png) `{self}`' // f'## {self.TITLE}'
+        self.readme \
+            // '' // self.COPYRIGHT // '' // f'github: {self.GITHUB}/{self}'
+        self.readme // self.ABOUT
+Project(
+    title='ViZual language environment',
+    about='''
+* object (hyper)graph interpreter
+'''
+).sync()
